@@ -7,9 +7,11 @@ from itertools import permutations
 
 # Box Optimizer Class
 class BoxOptimizer:
-    def __init__(self, truck_dims, box_dims):
+    def __init__(self, truck_dims, box_dims, box_weights, max_weight):
         self.truck_dims = np.array(truck_dims)
         self.original_boxes = np.array(box_dims)
+        self.box_weights = np.array(box_weights)
+        self.max_weight = max_weight
         self.best_arrangement = []
         self.best_utilization = 0
         self.all_valid_arrangements = []
@@ -69,10 +71,16 @@ class BoxOptimizer:
     def try_arrangement(self, boxes, box_indices):
         """Try to arrange a specific combination of boxes"""
         placed_boxes = []
+        total_weight = 0
 
         for box, original_idx in zip(boxes, box_indices):
             pos, rot = self.try_place_box(box, placed_boxes)
             if pos is not None:
+                box_weight = self.box_weights[original_idx]
+                total_weight += box_weight
+                if total_weight > self.max_weight:
+                    return None #arrangement exceeds weight limit
+
                 placed_boxes.append({
                     'dimensions': rot,
                     'position': pos,
@@ -84,23 +92,48 @@ class BoxOptimizer:
         return placed_boxes
 
     def optimize(self):
-        """Find optimal arrangement of boxes with maximum volume utilization"""
+        """Find optimal arrangement of boxes with maximum volume utilization and weight consideration"""
         boxes = self.original_boxes.copy()
         n_boxes = len(boxes)
         max_volume = 0
         best_arrangement = None
 
-        # Try all possible combinations of boxes
+        # Sort boxes by weight (heaviest first)
+        sorted_indices = np.argsort(self.box_weights)[::-1]
+        boxes = boxes[sorted_indices]
+        sorted_weights = np.array(self.box_weights)[sorted_indices]
+
+        # Try arrangements starting with heavier boxes
         for r in range(1, n_boxes + 1):
             for indices in permutations(range(n_boxes), r):
                 selected_boxes = boxes[list(indices)]
-                arrangement = self.try_arrangement(selected_boxes, indices)
+                selected_indices = sorted_indices[list(indices)]
+                arrangement = self.try_arrangement(selected_boxes, selected_indices)
 
                 if arrangement:
                     total_volume = sum(self.get_volume(box['dimensions']) 
                                     for box in arrangement)
 
-                    if total_volume > max_volume:
+                    # Check if boxes are stacked correctly by weight
+                    valid_weight_arrangement = True
+                    for i, box1 in enumerate(arrangement):
+                        box1_weight = self.box_weights[box1['original_index']-1]
+                        box1_bottom = box1['position'][2]
+                        
+                        for j, box2 in enumerate(arrangement):
+                            if i != j:
+                                box2_weight = self.box_weights[box2['original_index']-1]
+                                box2_bottom = box2['position'][2]
+                                
+                                # If a heavier box is above a lighter box
+                                if box2_bottom > box1_bottom and box2_weight > box1_weight:
+                                    valid_weight_arrangement = False
+                                    break
+                        
+                        if not valid_weight_arrangement:
+                            break
+
+                    if valid_weight_arrangement and total_volume > max_volume:
                         max_volume = total_volume
                         best_arrangement = arrangement
                         self.best_utilization = max_volume / self.get_volume(self.truck_dims)
@@ -109,15 +142,23 @@ class BoxOptimizer:
         return self.best_arrangement, self.best_utilization
 
 # Visualization Functions
-def generate_box_colors(num_boxes):
-    """Generate distinct colors for boxes"""
-    colors = [
-        'red', 'green', 'blue', 'yellow', 'magenta', 'cyan',
-        'brown', 'orange', 'purple', 'pink'
-    ]
+def generate_box_colors(num_boxes, scheme):
+    """Generate distinct colors for boxes based on selected scheme"""
+    if scheme == "Pastel":
+        colors = plt.cm.Pastel1(np.linspace(0, 1, num_boxes))
+    elif scheme == "Bold":
+        colors = plt.cm.Set1(np.linspace(0, 1, num_boxes))
+    elif scheme == "Grayscale":
+        colors = plt.cm.gray(np.linspace(0, 1, num_boxes))
+    else:  # Default
+        colors = [
+            'red', 'green', 'blue', 'yellow', 'magenta', 'cyan',
+            'brown', 'orange', 'purple', 'pink'
+        ]
     return colors[:num_boxes]
 
-def create_3d_visualization(truck_dims, box_arrangements):
+
+def create_3d_visualization(truck_dims, box_arrangements, colors):
     """Create multiple views visualization using Matplotlib"""
     fig = plt.figure(figsize=(20, 12))
 
@@ -136,7 +177,7 @@ def create_3d_visualization(truck_dims, box_arrangements):
         (ax5, 'Bottom View', (-90, -90))
     ]
 
-    colors = generate_box_colors(len(box_arrangements))
+
     legend_elements = []
 
     for view_info in views:
@@ -251,14 +292,24 @@ def main():
     truck_width = st.sidebar.number_input("Truck Width", min_value=1, value=5)
     truck_height = st.sidebar.number_input("Truck Height", min_value=1, value=3)
 
-    # Box dimensions
-    st.sidebar.subheader("Box Dimensions")
+    # Box dimensions and weights
+    st.sidebar.subheader("Box Configuration")
     num_boxes = st.sidebar.number_input("Number of Boxes", min_value=1, max_value=10, value=6)
 
+    # Weight limit
+    max_weight = st.sidebar.number_input("Maximum Total Weight (kg)", min_value=0.0, value=1000.0)
+
+    # Color customization
+    color_scheme = st.sidebar.selectbox(
+        "Color Scheme",
+        ["Default", "Pastel", "Bold", "Grayscale"]
+    )
+
     box_dimensions = []
+    box_weights = []
     for i in range(num_boxes):
         st.sidebar.markdown(f"**Box {i+1}**")
-        col1, col2, col3 = st.sidebar.columns(3)
+        col1, col2, col3, col4 = st.sidebar.columns(4)
 
         with col1:
             length = st.number_input(f"Length {i+1}", min_value=1, value=3, key=f"length_{i}")
@@ -266,15 +317,20 @@ def main():
             width = st.number_input(f"Width {i+1}", min_value=1, value=2, key=f"width_{i}")
         with col3:
             height = st.number_input(f"Height {i+1}", min_value=1, value=2, key=f"height_{i}")
+        with col4:
+            weight = st.number_input(f"Weight {i+1} (kg)", min_value=0.0, value=10.0, key=f"weight_{i}")
 
         box_dimensions.append([length, width, height])
+        box_weights.append(weight)
 
     # Optimize button
     if st.sidebar.button("Optimize Arrangement"):
         # Create optimizer instance
         optimizer = BoxOptimizer(
             truck_dims=[truck_length, truck_width, truck_height],
-            box_dims=box_dimensions
+            box_dims=box_dimensions,
+            box_weights=box_weights,
+            max_weight=max_weight
         )
 
         # Run optimization
@@ -286,9 +342,11 @@ def main():
 
         with col1:
             st.subheader("3D Visualization")
+            colors = generate_box_colors(len(arrangement), color_scheme)
             fig = create_3d_visualization(
                 [truck_length, truck_width, truck_height],
-                arrangement
+                arrangement,
+                colors
             )
             st.pyplot(fig)
 
@@ -304,24 +362,62 @@ def main():
             st.metric("Space Utilization", f"{stats['utilization_percentage']:.2f}%")
 
             st.subheader("Arrangement Details")
-            for idx, box in enumerate(arrangement):
+            arrangement_data = []
+            total_weight = 0
+
+            for box in arrangement:
+                box_weight = box_weights[box['original_index']-1]
+                total_weight += box_weight
+                arrangement_data.append({
+                    'box_number': box['original_index'],
+                    'dimensions': box['dimensions'].tolist(),
+                    'position': box['position'].tolist(),
+                    'weight': box_weight
+                })
                 st.markdown(f"""
                     **Box {box['original_index']}:**
                     - Dimensions: {box['dimensions']}
                     - Position: {box['position']}
+                    - Weight: {box_weight} kg
                 """)
+
+            st.metric("Total Weight", f"{total_weight:.2f} kg")
+
+            # Export functionality
+            if st.button("Export Arrangement"):
+                import json
+                import base64
+
+                export_data = {
+                    'truck_dimensions': [truck_length, truck_width, truck_height],
+                    'arrangement': arrangement_data,
+                    'statistics': stats
+                }
+
+                json_str = json.dumps(export_data, indent=2)
+                b64 = base64.b64encode(json_str.encode()).decode()
+                href = f'data:application/json;base64,{b64}'
+                st.download_button(
+                    label="Download JSON",
+                    data=json_str,
+                    file_name="box_arrangement.json",
+                    mime="application/json"
+                )
 
     # Instructions
     if 'help' not in st.session_state:
         st.info("""
             **How to use:**
             1. Enter truck dimensions in the sidebar
-            2. Specify the number of boxes and their dimensions
-            3. Click 'Optimize Arrangement' to see the results
-            4. View the 3D visualization and arrangement details
+            2. Specify the number of boxes and their dimensions and weights
+            3. Set a maximum total weight limit.
+            4. Choose a color scheme.
+            5. Click 'Optimize Arrangement' to see the results
+            6. View the 3D visualization and arrangement details
+            7. Click 'Export Arrangement' to download the results as a JSON file.
 
             The optimizer will attempt to find the best arrangement while considering
-            possible rotations of the boxes.
+            possible rotations of the boxes and respecting the weight limit.
         """)
 
 if __name__ == "__main__":
