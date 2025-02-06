@@ -207,10 +207,12 @@ def create_3d_visualization(truck_dims, box_arrangements, colors):
             )
 
         # Plot boxes
+        placed_boxes_indices = set()  # Keep track of actually placed boxes
         for idx, box in enumerate(box_arrangements):
             pos = box['position']
             dims = box['dimensions']
-            original_idx = box.get('original_index', idx + 1)  # Use original index if available
+            original_idx = box.get('original_index', idx + 1)
+            placed_boxes_indices.add(original_idx)
 
             # Define vertices of the box
             vertices = np.array([
@@ -239,9 +241,11 @@ def create_3d_visualization(truck_dims, box_arrangements, colors):
             poly.set_facecolor(colors[idx])
             ax.add_collection3d(poly)
 
-            if ax == ax1:  # Only add to legend for the first view
+            # Add to legend only for the first view and only for placed boxes
+            if ax == ax1:
+                weight = box_weights[original_idx-1]
                 legend_elements.append(plt.Rectangle((0, 0), 1, 1, fc=colors[idx], 
-                                                    label=f'Box {original_idx} ({dims[0]}x{dims[1]}x{dims[2]})'))
+                                                  label=f'Box {original_idx} ({dims[0]}x{dims[1]}x{dims[2]}) - {weight}kg'))
 
         # Set view angle
         ax.view_init(elev=elev, azim=azim)
